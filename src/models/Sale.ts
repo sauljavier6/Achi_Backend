@@ -1,5 +1,15 @@
 // @/models.ts
-import { Table, Model, Column, DataType, PrimaryKey, AutoIncrement, ForeignKey, BelongsTo, HasMany } from "sequelize-typescript";
+import {
+  Table,
+  Model,
+  Column,
+  DataType,
+  PrimaryKey,
+  AutoIncrement,
+  ForeignKey,
+  BelongsTo,
+  HasMany,
+} from "sequelize-typescript";
 import State from "./State";
 import PaymentSale from "./PaymentSale";
 import SaleProduct from "./SaleProduct";
@@ -43,9 +53,15 @@ export default class Sale extends Model {
     type: DataType.DECIMAL(10, 2),
     allowNull: false,
   })
+  declare Envio: number;
+
+  @Column({
+    type: DataType.DECIMAL(10, 2),
+    allowNull: false,
+  })
   declare Iva: number;
 
-  //relacion tabla estado venta
+  //relacion tabla tipo registro
   @ForeignKey(() => State)
   @Column({
     type: DataType.INTEGER,
@@ -81,6 +97,13 @@ export default class Sale extends Model {
   declare Batch: string;
 
   @Column({
+    type: DataType.ENUM("Pagada", "Pendiente"),
+    allowNull: false,
+    defaultValue: "Pendiente",
+  })
+  declare Pagada: "Pagada" | "Pendiente";
+
+  @Column({
     type: DataType.BOOLEAN,
     allowNull: true,
     defaultValue: true,
@@ -95,12 +118,11 @@ export default class Sale extends Model {
   declare StateSale: boolean;
 
   @HasMany(() => PaymentSale)
-  PaymentSale?: PaymentSale[]; 
+  PaymentSale?: PaymentSale[];
 
   @HasMany(() => SaleProduct)
   SaleProduct?: SaleProduct[];
 
   @HasMany(() => FacturacionTicket)
   FacturacionTicket?: FacturacionTicket[];
-
 }

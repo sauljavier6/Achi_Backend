@@ -7,7 +7,6 @@ import PaymentSale from "../models/PaymentSale";
 import Email from "../models/Email";
 import User from "../models/User";
 import Phone from "../models/Phone";
-import nodemailer from "nodemailer";
 import sequelize from "../config/database";
 import { QueryTypes } from "sequelize";
 import State from "../models/State";
@@ -21,15 +20,13 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
 });
 
 export const payment = async (req: any, res: any) => {
-  const { amount, items, name, email, phone } = req.body.datos;
+  const { amount, items, name } = req.body.datos;
   try {
     const paymentIntent = await stripe.paymentIntents.create({
       amount,
       currency: "mxn",
       metadata: {
         name: name,
-        email: email,
-        phone: phone,
         items: JSON.stringify(items),
       },
     });
@@ -51,8 +48,8 @@ export const savesale = async (req: any, res: any) => {
       subtotal,
       total,
       iva,
+      envio,
       address,
-      paymentMethod,
     } = req.body.datos;
 
     let user = null;
@@ -93,12 +90,14 @@ export const savesale = async (req: any, res: any) => {
       ID_User: user ? user.ID_User : 1,
       Subtotal: subtotal,
       Total: total,
+      Envio: envio,
       Iva: iva,
       Balance_Total: total,
       ID_State: 2,
       ID_Address: direccion?.ID_Address,
       ID_Operador: 1,
       Batch: "web",
+      Pagada: "Pendiente",
     });
 
     for (const item of items) {
@@ -111,29 +110,128 @@ export const savesale = async (req: any, res: any) => {
         Iva: item.Iva,
         State: true,
       });
-
-      const stock = await Stock.findOne({ where: { ID_Stock: item.ID_Stock } });
-      if (stock) {
-        stock.Amount -= item.Quantity;
-        await stock.save();
-      }
     }
 
-    await PaymentSale.create({
-      ID_Sale: sale.ID_Sale,
-      ID_Payment: paymentMethod,
-      Description: "Pago web",
-      Monto: 0,
-      ReferenceNumber: "",
-      State: true,
-    });
-
-    sendSaleEmail(sale.ID_Sale);
-
-    res.json({ message: "Venta guardada correctamente" });
+    res.json({ message: "Venta guardada correctamente", saleId: sale.ID_Sale });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Error guardando la venta" });
+  }
+};
+
+export const updateSaleStatus = async (req: any, res: any) => {
+  const transaction = await sequelize.transaction();
+
+  try {
+    const { saleId, paymentId, items, total } = req.body;
+
+    if (!saleId || !paymentId) {
+      await transaction.rollback();
+      return res.status(400).json({
+        message: "Falta saleId o paymentId",
+      });
+    }
+
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      await transaction.rollback();
+      return res.status(400).json({
+        message: "Items inválidos",
+      });
+    }
+
+    const sale: any = await Sale.findByPk(saleId, { transaction });
+
+    if (!sale) {
+      await transaction.rollback();
+      return res.status(404).json({
+        message: "Venta no encontrada",
+      });
+    }
+
+    if (sale.Pagada === "Pagada") {
+      await transaction.rollback();
+      return res.json({
+        message: "La venta ya estaba pagada",
+      });
+    }
+
+    for (const item of items) {
+      const stock: any = await Stock.findOne({
+        where: {
+          ID_Stock: item.ID_Stock,
+        },
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      });
+
+      if (!stock) {
+        await transaction.rollback();
+        return res.status(404).json({
+          message: `No se encontró stock para el producto ${item.ID_Product}`,
+        });
+      }
+
+      const cantidadActual = Number(stock.Amount) || 0;
+      const cantidadCompra = Number(item.Quantity) || 0;
+
+      if (cantidadCompra <= 0) {
+        await transaction.rollback();
+        return res.status(400).json({
+          message: "Cantidad inválida en el carrito",
+        });
+      }
+
+      if (cantidadActual < cantidadCompra) {
+        await transaction.rollback();
+        return res.status(400).json({
+          message: `Stock insuficiente para el producto ${item.ID_Product}`,
+        });
+      }
+
+      await stock.update(
+        {
+          Amount: cantidadActual - cantidadCompra,
+        },
+        { transaction }
+      );
+    }
+
+    await sale.update(
+      {
+        Pagada: "Pagada",
+        PaymentIntentId: paymentId,
+        Balance_Total: 0,
+      },
+      { transaction }
+    );
+
+    await PaymentSale.create(
+      {
+        ID_Sale: sale.ID_Sale,
+        ID_Payment: 3,
+        Description: "Pago web",
+        Monto: total,
+        ReferenceNumber: paymentId,
+        State: true,
+      },
+      { transaction }
+    );
+
+    await transaction.commit();
+
+    await sendSaleEmail(sale.ID_Sale);
+
+    return res.json({
+      message: "Estado de la venta actualizado correctamente",
+    });
+  } catch (error) {
+    await transaction.rollback();
+
+    console.error(error);
+
+    return res.status(500).json({
+      message: "Error al actualizar venta",
+    });
   }
 };
 
@@ -275,7 +373,6 @@ export const sendSaleEmail = async (saleId: number) => {
       subject: `Ticket de venta #${sale.ID_Sale}`,
       html,
     });
-
   } catch (error) {
     console.error("Error al enviar ticket:", error);
   }

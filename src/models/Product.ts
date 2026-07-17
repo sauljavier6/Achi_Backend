@@ -1,10 +1,21 @@
 // @/models.ts
-import { Table, Model, Column, DataType, PrimaryKey, AutoIncrement, ForeignKey, BelongsTo, HasMany } from "sequelize-typescript";
+import {
+  Table,
+  Model,
+  Column,
+  DataType,
+  PrimaryKey,
+  AutoIncrement,
+  ForeignKey,
+  BelongsTo,
+  HasMany,
+} from "sequelize-typescript";
 import Stock from "./Stock";
 import Category from "./Category";
 import SaleProduct from "./SaleProduct";
 import ImagenProduct from "./ImagenProduct";
 import Iva from "../models/Iva";
+import SubCategory from "./SubCategory";
 
 @Table({ tableName: "Product" })
 export default class Product extends Model {
@@ -31,6 +42,17 @@ export default class Product extends Model {
 
   @BelongsTo(() => Category)
   Category?: Category;
+
+  //relacion tabla subcategory
+  @ForeignKey(() => SubCategory)
+  @Column({
+    type: DataType.INTEGER,
+    allowNull: true,
+  })
+  declare ID_SubCategory: number;
+
+  @BelongsTo(() => SubCategory)
+  SubCategory?: SubCategory;
 
   @Column({
     type: DataType.STRING,

@@ -23,6 +23,8 @@ import informationRoutes from './informationRoutes';
 import ivaRoutes from './ivaRoutes';
 import facturacionRoutes from './facturacionRoutes';
 import saleWebRoutes from './saleWebRoutes';
+import SubcategoryRoutes from './SubcategoryRoutes';
+import subcategoriesRoutes from './ecommerceRoutes/subcategoriesRoutes';
 
 const router = Router();
 
@@ -32,6 +34,7 @@ router.use('/rol', rolRoutes);
 router.use('/email', emailRoutes);
 router.use('/product', productRoutes);
 router.use('/category', categoryRoutes);
+router.use('/subcategory', SubcategoryRoutes);
 router.use('/sale', saleRoutes);
 router.use('/saleweb', saleWebRoutes);
 router.use('/state', stateRoutes);
@@ -51,6 +54,7 @@ router.use('/facturacion', facturacionRoutes);
 router.use('/ecommerce/products', productERoutes);
 router.use('/stripe', stripeRoutes);
 router.use('/ecommerce/categories', categoriesRoutes);
+router.use('/ecommerce/subcategories', subcategoriesRoutes);
 router.use('/ecommerce/quotes', quotesERoutes);
 
 export default router;

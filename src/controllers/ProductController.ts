@@ -1,11 +1,10 @@
-import Product from '../models/Product';
-import Stock from '../models/Stock';
-import Category from '../models/Category';
+import Product from "../models/Product";
+import Stock from "../models/Stock";
+import Category from "../models/Category";
 import { Op } from "sequelize";
-import ImagenProduct from '../models/ImagenProduct';
+import ImagenProduct from "../models/ImagenProduct";
 import fs from "fs";
 import path from "path";
-
 
 interface StockItem {
   ID_Stock?: number;
@@ -101,13 +100,23 @@ export const getProducts = async (req: any, res: any) => {
 
 export const postProducts = async (req: any, res: any) => {
   try {
-    const { Description, ID_Category, Code, Codesat, StockData, Imagenes, ID_Iva } = req.body;
+    const {
+      Description,
+      ID_Category,
+      ID_SubCategory,
+      Code,
+      Codesat,
+      StockData,
+      Imagenes,
+      ID_Iva,
+    } = req.body;
 
     const stock = JSON.parse(StockData);
 
     const newProduct = await Product.create({
       Description,
       ID_Category,
+      ID_SubCategory,
       Code,
       Codesat,
       ID_Iva,
@@ -121,8 +130,8 @@ export const postProducts = async (req: any, res: any) => {
             ...stock,
             ID_Product: newProduct.ID_Product,
             State: stock.State ?? true,
-          })
-        )
+          }),
+        ),
       );
     }
 
@@ -134,8 +143,8 @@ export const postProducts = async (req: any, res: any) => {
             ID_Product: newProduct.ID_Product,
             Imagen: file.filename,
             State: true,
-          })
-        )
+          }),
+        ),
       );
     }
 
@@ -149,25 +158,26 @@ export const postProducts = async (req: any, res: any) => {
   }
 };
 
-export const deleteproducts = async (req:any, res:any) => {
+export const deleteproducts = async (req: any, res: any) => {
   const { ids } = req.body;
 
   try {
-
     if (!Array.isArray(ids) || ids.length === 0) {
-      return res.status(400).json({ message: 'No se proporcionaron IDs válidos' });
+      return res
+        .status(400)
+        .json({ message: "No se proporcionaron IDs válidos" });
     }
 
     await Product.destroy({
       where: {
-        ID_Product: ids
-      }
+        ID_Product: ids,
+      },
     });
 
-    res.json({ message: 'Productos eliminados correctamente' });
+    res.json({ message: "Productos eliminados correctamente" });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ message: 'Error eliminando productos' });
+    res.status(500).json({ message: "Error eliminando productos" });
   }
 };
 
@@ -176,33 +186,29 @@ export const getProductById = async (req: any, res: any) => {
 
   try {
     const product = await Product.findByPk(id, {
-      include: [
-        { model: Stock },
-        { model: Category },
-      ],
+      include: [{ model: Stock }, { model: Category }],
     });
 
     if (!product) {
-      return res.status(404).json({ message: 'Producto no encontrado' });
+      return res.status(404).json({ message: "Producto no encontrado" });
     }
 
     const imagenes = await ImagenProduct.findAll({
       where: { ID_Product: id },
     });
 
-    
-    const imagenesArray = imagenes.map(img => img.Imagen).filter(Boolean);
+    const imagenesArray = imagenes.map((img) => img.Imagen).filter(Boolean);
 
     const productWithImages = {
       ...product.toJSON(),
-       Iva: Number(product.Iva), 
+      Iva: Number(product.Iva),
       Imagenes: imagenesArray,
     };
 
     res.status(200).json(productWithImages);
   } catch (error) {
-    console.error('Error al obtener producto:', error);
-    res.status(500).json({ message: 'Error del servidor' });
+    console.error("Error al obtener producto:", error);
+    res.status(500).json({ message: "Error del servidor" });
   }
 };
 
@@ -228,12 +234,25 @@ export const updateProduct = async (req: any, res: any) => {
       ID_Product,
       Description,
       ID_Category,
+      ID_SubCategory,
       Code,
       Codesat,
       State,
       StockData,
-      ID_Iva
+      ID_Iva,
     } = req.body;
+
+    console.log("Datos recibidos para actualizar:", {
+      ID_Product,
+      Description,
+      ID_Category,
+      ID_SubCategory,
+      Code,
+      Codesat,
+      State,
+      StockData,
+      ID_Iva,
+    });
 
     const parsedStockData = JSON.parse(StockData);
 
@@ -248,6 +267,7 @@ export const updateProduct = async (req: any, res: any) => {
     await product.update({
       Description,
       ID_Category,
+      ID_SubCategory,
       Code,
       Codesat,
       ID_Iva,
@@ -315,7 +335,9 @@ export const updateProduct = async (req: any, res: any) => {
 
     res.status(200).json({
       message: "Producto y stocks actualizados correctamente",
-      data: await Product.findByPk(ID_Product, { include: [Stock, ImagenProduct] }),
+      data: await Product.findByPk(ID_Product, {
+        include: [Stock, ImagenProduct],
+      }),
     });
   } catch (error) {
     console.error("Error al actualizar producto:", error);
@@ -327,7 +349,6 @@ export const searchProducts = async (req: any, res: any) => {
   const { q } = req.query;
 
   try {
-
     if (!isNaN(Number(q))) {
       const product = await Product.findOne({
         where: { ID_Product: Number(q) },
@@ -348,7 +369,7 @@ export const searchProducts = async (req: any, res: any) => {
 
     res.json(products);
   } catch (error) {
-    console.error('Error al buscar productos:', error);
-    res.status(500).json({ message: 'Error del servidor' });
+    console.error("Error al buscar productos:", error);
+    res.status(500).json({ message: "Error del servidor" });
   }
 };

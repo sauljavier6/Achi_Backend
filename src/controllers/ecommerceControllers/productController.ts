@@ -5,53 +5,32 @@ import Product from "../../models/Product";
 import Stock from "../../models/Stock";
 import { Op, Sequelize } from "sequelize";
 
-
 export const getProductsCatalogo = async (req: any, res: any) => {
   try {
-    const {
-      category,
-      minPrice,
-      maxPrice,
-      sortBy, // "newest" | "bestPrice" | "bestSeller"
-      page = 1,
-      limit = 10,
-    } = req.query;
+    const { category, subcategory, sortBy, page = 1, limit = 10 } = req.query;
 
-    const offset = (page - 1) * limit;
+    console.log("Obteniendo productos para catálogo con filtros:", {
+      category,
+      subcategory,
+      sortBy,
+      page,
+      limit,
+    });
+
+    const offset = (Number(page) - 1) * Number(limit);
 
     const where: any = {};
-    const stockWhere: any = {};
 
-    // Filtro por categoría (está en Product)
     if (category) {
-      const categories = await Category.findAll({
-        where: {
-          [Op.or]: [
-            { Description:category  },
-            { Genero: category  }
-          ]
-        }
-      });
-
-      if (categories.length) {
-        where.ID_Category = {
-          [Op.in]: categories.map(c => c.ID_Category)
-        };
-      }
+      where.ID_Category = Number(category);
     }
 
-    // Filtro por rango de precios (está en Stock)
-    if (minPrice || maxPrice) {
-      if (minPrice) stockWhere.Saleprice = { [Op.gte]: Number(minPrice) };
-      if (maxPrice) {
-        stockWhere.Saleprice = {
-          ...stockWhere.Saleprice,
-          [Op.lte]: Number(maxPrice),
-        };
-      }
+    if (subcategory) {
+      where.ID_SubCategory = Number(subcategory);
     }
 
     let order: any[] = [["createdAt", "DESC"]];
+
     if (sortBy === "bestPrice") {
       order = [[{ model: Stock, as: "Stocks" }, "Saleprice", "ASC"]];
     } else if (sortBy === "worstPrice") {
@@ -62,7 +41,6 @@ export const getProductsCatalogo = async (req: any, res: any) => {
       order = [["createdAt", "DESC"]];
     }
 
-
     const { rows: products, count } = await Product.findAndCountAll({
       include: [
         {
@@ -71,7 +49,6 @@ export const getProductsCatalogo = async (req: any, res: any) => {
         },
         {
           model: Stock,
-          where: Object.keys(stockWhere).length ? stockWhere : undefined,
         },
         {
           model: ImagenProduct,
@@ -79,12 +56,12 @@ export const getProductsCatalogo = async (req: any, res: any) => {
       ],
       where,
       order,
-      offset: Number(offset),
+      offset,
       limit: Number(limit),
       distinct: true,
     });
 
-    const totalPages = Math.ceil(count / limit);
+    const totalPages = Math.ceil(count / Number(limit));
 
     return res.status(200).json({
       success: true,
@@ -98,30 +75,34 @@ export const getProductsCatalogo = async (req: any, res: any) => {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
-
 export const getProducts = async (req: any, res: any) => {
-  console.log('Obteniendo lista de productos con paginación');
+  console.log("Obteniendo lista de productos con paginación");
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const offset = (page - 1) * limit;
 
-
     const { rows: products, count } = await Product.findAndCountAll({
       include: [
         {
           model: Category,
-          attributes: ['ID_Category', 'Description'],
+          attributes: ["ID_Category", "Description"],
         },
         {
           model: Stock,
-          attributes: ['ID_Stock', 'Description', 'Amount', 'Saleprice', 'Purchaseprice'],
+          attributes: [
+            "ID_Stock",
+            "Description",
+            "Amount",
+            "Saleprice",
+            "Purchaseprice",
+          ],
         },
         {
           model: ImagenProduct,
         },
       ],
-      order: [['ID_Product', 'DESC']],
+      order: [["ID_Product", "DESC"]],
       offset,
       limit,
       distinct: true,
@@ -135,11 +116,11 @@ export const getProducts = async (req: any, res: any) => {
       totalPages,
       totalItems: count,
       hasMore: page < totalPages,
-      message: 'Lista de productos obtenida correctamente',
+      message: "Lista de productos obtenida correctamente",
     });
   } catch (error) {
-    console.error('Error al obtener productos:', error);
-    res.status(500).json({ message: 'Error en el servidor' });
+    console.error("Error al obtener productos:", error);
+    res.status(500).json({ message: "Error en el servidor" });
   }
 };
 
@@ -157,13 +138,13 @@ export const getProductById = async (req: any, res: any) => {
     });
 
     if (!product) {
-      return res.status(404).json({ message: 'Producto no encontrado' });
+      return res.status(404).json({ message: "Producto no encontrado" });
     }
 
     res.status(200).json(product);
   } catch (error) {
-    console.error('Error al obtener producto:', error);
-    res.status(500).json({ message: 'Error del servidor' });
+    console.error("Error al obtener producto:", error);
+    res.status(500).json({ message: "Error del servidor" });
   }
 };
 
@@ -181,6 +162,11 @@ export const searchProducts = async (req: any, res: any) => {
           [Op.iLike]: `%${description}%`,
         },
       },
+      include: [
+        {
+          model: ImagenProduct,
+        },
+      ],
     });
 
     res.status(200).json(products);
@@ -190,43 +176,31 @@ export const searchProducts = async (req: any, res: any) => {
   }
 };
 
-export const getRandomUniqueProductsByGender = async (req: any, res: any) => {
+export const getRandomUniqueProductsByCategory = async (req: any, res: any) => {
   try {
-    const { gender } = req.params;
+    const { category, id } = req.params;
 
-    if (!gender) {
-      return res.status(400).json({ message: "Debe enviar el género" });
+    if (!category) {
+      return res.status(400).json({ message: "Debe enviar la categoría" });
     }
 
     const products = await Product.findAll({
       include: [
         {
           model: Category,
-          where: { Genero: gender },
+          where: { ID_Category: category },
         },
         { model: Stock },
         { model: ImagenProduct },
       ],
       order: Sequelize.literal("RANDOM()"),
-      limit: 20,
+      limit: 4,
     });
-    
-    const unique: any[] = [];
-    const used = new Set();
-
-    for (const p of products) {
-      if (!used.has(p.ID_Category)) {
-        used.add(p.ID_Category);
-        unique.push(p);
-      }
-      if (unique.length === 4) break;
-    }
 
     res.status(200).json({
-      data: unique,
+      data: products,
       message: "Productos random únicos por categoría",
     });
-
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: "Error en el servidor" });
