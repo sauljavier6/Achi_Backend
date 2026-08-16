@@ -109,6 +109,7 @@ export const postProducts = async (req: any, res: any) => {
       StockData,
       Imagenes,
       ID_Iva,
+      State,
     } = req.body;
 
     const stock = JSON.parse(StockData);
@@ -120,7 +121,7 @@ export const postProducts = async (req: any, res: any) => {
       Code,
       Codesat,
       ID_Iva,
-      State: true,
+      State: State === undefined ? true : State === true || State === "true" || State === "Activo",
     });
 
     if (Array.isArray(stock)) {
@@ -271,7 +272,7 @@ export const updateProduct = async (req: any, res: any) => {
       Code,
       Codesat,
       ID_Iva,
-      State: State === "true",
+      State: State == null ? product.State : State === "true",
     });
 
     const stockIdsFromClient = parsedStockData

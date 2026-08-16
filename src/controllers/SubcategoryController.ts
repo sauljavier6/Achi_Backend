@@ -4,11 +4,12 @@ import SubCategory from '../models/SubCategory';
 
 export const postSubCategory = async (req: Request, res: Response) => {
   const { Description, State } = req.body;
+  const normalizedState = State === undefined ? true : State === true || State === 'true' || State === 'Activo';
 
   try {
     const newSubCategory = await SubCategory.create({
       Description,
-      State: State !== undefined ? State : true,
+      State: normalizedState,
     });
 
     res.status(201).json({
@@ -102,6 +103,7 @@ export const updateSubCategory = async (req: any, res: any) => {
   try {
     const { id } = req.params;
     const { Description, State } = req.body;
+    const normalizedState = State === true || State === 'true' || State === 'Activo';
 
     const subcategory = await SubCategory.findByPk(id);
 
@@ -113,7 +115,7 @@ export const updateSubCategory = async (req: any, res: any) => {
 
     await subcategory.update({
       Description,
-      State,
+      State: normalizedState,
     });
 
     res.status(200).json({

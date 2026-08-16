@@ -6,6 +6,7 @@ import PaymentSale from "../models/PaymentSale";
 import Phone from "../models/Phone";
 import Product from "../models/Product";
 import Sale from "../models/Sale";
+import { formatPublicFolio } from "../utils/publicFolio";
 import SaleProduct from "../models/SaleProduct";
 import State from "../models/State";
 import Stock from "../models/Stock";
@@ -30,16 +31,18 @@ export const getListSaleWeb = async (req: any, res: any) => {
     const limit = parseInt(req.query.limit as string) || 10;
     const offset = (page - 1) * limit;
     const searchTerm = req.query.searchTerm || "";
+    const numericFolio = /^\d{1,6}$/.test(String(searchTerm).trim()) ? Number(searchTerm) : null;
 
-    let sales, count;
+    let sales: Sale[] = [];
+    let count = 0;
 
-    if (searchTerm) {
+    if (searchTerm && numericFolio !== null) {
       // Buscar por ID_Sale sin paginación
       const result = await Sale.findAndCountAll({
         where: {
           ID_State: 2,
           Batch: "web",
-          ID_Sale: searchTerm,
+          ID_Sale: numericFolio,
         },
         order: [["ID_Sale", "DESC"]],
         distinct: true,
@@ -47,7 +50,7 @@ export const getListSaleWeb = async (req: any, res: any) => {
 
       sales = result.rows;
       count = result.count;
-    } else {
+    } else if (!searchTerm) {
       // Paginación normal
       const result = await Sale.findAndCountAll({
         where: {
@@ -63,6 +66,9 @@ export const getListSaleWeb = async (req: any, res: any) => {
 
       sales = result.rows;
       count = result.count;
+    } else {
+      sales = [];
+      count = 0;
     }
 
     // Incluir info de user y operator
@@ -144,9 +150,10 @@ export const printRemision = async (req: any, res: any) => {
     }
 
     // 🎨 Colores corporativos
-    const primaryColor = "#0A4FA3";
-    const lightGray = "#EAEAEA";
-    const darkGray = "#333";
+    const primaryColor = "#C70063";
+    const secondaryColor = "#007782";
+    const lightGray = "#E8EDF2";
+    const darkGray = "#1E293B";
 
     const doc = new PDFDocument({ margin: 40 });
 
@@ -164,15 +171,15 @@ export const printRemision = async (req: any, res: any) => {
     doc
       .fillColor(primaryColor)
       .fontSize(22)
-      .text("MEDICARE TJ", { align: "center" });
+      .text("ACHI VETERINARIA", { align: "left" });
 
     doc.moveDown(0.3);
 
     doc
       .fontSize(10)
       .fillColor(darkGray)
-      .text("Remision", { align: "center" })
-      .text("Tel: (663) 403-2690 | ValenttoMX@gmail.com", {
+      .text("REMISION DE PEDIDO", { align: "left" })
+      .text("Achi Veterinaria | Tijuana, BC", {
         align: "center",
       })
       .text("Tijuana, B.C.", { align: "center" });
@@ -195,14 +202,16 @@ export const printRemision = async (req: any, res: any) => {
     doc
       .fontSize(14)
       .fillColor(primaryColor)
-      .text("Detalles de la Venta", { underline: true });
+      .text("Datos del pedido");
 
     doc.moveDown(0.5);
 
     doc.fillColor(darkGray).fontSize(11);
-    doc.text(`Número de venta: ${sale.ID_Sale}`);
+    doc.text(`Folio del pedido: ${formatPublicFolio(sale, "order")}`);
     doc.text(`Fecha: ${formatDateTime(sale.createdAt)}`);
     doc.text(`Cliente: ${cliente?.Name || "Público General"}`);
+    doc.text(`Correo: ${cliente?.Email?.Description || "No registrado"}`);
+    doc.text(`Teléfono: ${cliente?.Phone?.Description || "No registrado"}`);
     doc.text(`Dirección: ${address?.Description || "No registrada"}`);
 
     doc.moveDown();
@@ -213,7 +222,7 @@ export const printRemision = async (req: any, res: any) => {
     doc
       .fontSize(14)
       .fillColor(primaryColor)
-      .text("Productos", { underline: true });
+      .text("Productos a entregar");
 
     doc.moveDown(0.7);
 
@@ -226,7 +235,8 @@ export const printRemision = async (req: any, res: any) => {
     // Encabezados TODOS en la MISMA línea
     const tableHeaderY = doc.y;
 
-    doc.fontSize(11).fillColor(darkGray);
+    doc.rect(40, tableHeaderY - 5, 510, 24).fill("#F1F5F9");
+    doc.fontSize(10).fillColor(darkGray);
     doc.text("Descripción", colDesc, tableHeaderY);
     doc.text("Cant.", colCant, tableHeaderY);
     doc.text("Precio", colPrecio, tableHeaderY);
@@ -243,7 +253,7 @@ export const printRemision = async (req: any, res: any) => {
       .stroke();
 
     // Filas
-    saleJson.SaleProduct.forEach((item: any) => {
+    saleJson.SaleProduct.forEach((item: any, index: number) => {
       const subtotal = item.Quantity * parseFloat(item.Stock.Saleprice);
 
       // Evitar desbordamiento de página
@@ -252,6 +262,7 @@ export const printRemision = async (req: any, res: any) => {
         y = 50;
       }
 
+      if (index % 2 === 1) doc.rect(40, y - 3, 510, 20).fill("#FAFAFC");
       doc.fontSize(10).fillColor(darkGray);
 
       // Descripción con ancho limitado
@@ -275,26 +286,26 @@ export const printRemision = async (req: any, res: any) => {
       }
     });
 
-    doc.moveDown(4);
+    doc.y = y + 18;
 
     // -----------------------------------------------------
     // 💰 TOTAL Y SUBTOTAL
     // -----------------------------------------------------
     doc
       .fontSize(14)
-      .fillColor(primaryColor)
+      .fillColor(darkGray)
       .text(`SUBTOTAL: $${sale.Subtotal}`, { align: "right" });
     doc
       .fontSize(14)
-      .fillColor(primaryColor)
-      .text(`IVA: $${sale.Iva}`, { align: "right" });
+      .fillColor(darkGray)
+      .text(`IVA INCLUIDO: $${sale.Iva}`, { align: "right" });
     doc
       .fontSize(14)
-      .fillColor(primaryColor)
-      .text(`Envio: $250`, { align: "right" });
+      .fillColor(darkGray)
+      .text(`ENVÍO: $${sale.Envio}`, { align: "right" });
     doc
       .fontSize(14)
-      .fillColor(primaryColor)
+      .fillColor(secondaryColor)
       .text(`TOTAL: $${sale.Total}`, { align: "right" });
 
     doc.moveDown(2);
@@ -305,7 +316,7 @@ export const printRemision = async (req: any, res: any) => {
     doc
       .fontSize(10)
       .fillColor(darkGray)
-      .text("Gracias por su compra. Para dudas o aclaraciones, contáctenos.", {
+      .text("Documento de entrega - Achi Veterinaria", {
         align: "center",
       });
 

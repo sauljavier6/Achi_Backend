@@ -3,13 +3,13 @@ import Category from '../models/Category';
 import { Op } from 'sequelize';
 
 export const postCategory = async (req: Request, res: Response) => {
-  const { Description, Genero } = req.body;
+  const { Description, State } = req.body;
+  const normalizedState = State === undefined ? true : State === true || State === 'true' || State === 'Activo';
 
   try {
     const newCategory = await Category.create({
       Description,
-      Genero,
-      State: true,
+      State: normalizedState,
     });
 
     res.status(201).json({
@@ -102,7 +102,8 @@ export const getCategoryById = async (req: any, res: any) => {
 export const updateCategory = async (req: any, res: any) => {
   try {
     const { id } = req.params;
-    const { Description, Genero } = req.body;
+    const { Description, State } = req.body;
+    const normalizedState = State === true || State === 'true' || State === 'Activo';
 
     const category = await Category.findByPk(id);
 
@@ -114,7 +115,7 @@ export const updateCategory = async (req: any, res: any) => {
 
     await category.update({
       Description,
-      Genero,
+      State: normalizedState,
     });
 
     res.status(200).json({

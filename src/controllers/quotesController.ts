@@ -1,346 +1,283 @@
-// @/controllers/SaleController.ts
-import Category from "../models/Category";
+import { Op } from "sequelize";
+import Iva from "../models/Iva";
+import PaymentSale from "../models/PaymentSale";
 import Product from "../models/Product";
 import Sale from "../models/Sale";
-import Stock from "../models/Stock";
-import User from "../models/User";
-import PaymentSale from "../models/PaymentSale";
-import ProductSale from "../models/SaleProduct";
 import SaleProduct from "../models/SaleProduct";
 import State from "../models/State";
-import Iva from "../models/Iva";
+import Stock from "../models/Stock";
+import User from "../models/User";
+import Email from "../models/Email";
+import Phone from "../models/Phone";
+import { createTaxSnapshot, extractIncludedTax, roundMoney } from "../utils/taxInclusive";
+
+const QUOTE_STATE_ID = 1;
+
+async function getUserSummary(userId: number) {
+  const user = await User.findByPk(userId, {
+    attributes: ["ID_User", "Name"],
+    include: [{ model: Email, attributes: ["Description"] }, { model: Phone, attributes: ["Description"] }],
+  });
+  if (!user) return null;
+  const plain = user.get({ plain: true }) as any;
+  return {
+    ID_User: plain.ID_User,
+    Name: plain.Name,
+    Email: plain.Email?.Description ?? "",
+    Phone: plain.Phone?.Description ?? "",
+  };
+}
 
 function createBatch(userId = 0) {
-  const now = new Date();
-  const datePart = now.toISOString().split("T")[0].replace(/-/g, "");
+  const datePart = new Date().toISOString().slice(0, 10).replace(/-/g, "");
   const randomPart = Math.floor(1000 + Math.random() * 9000);
+  return `${datePart}${String(userId).padStart(3, "0")}${randomPart}`;
+}
 
-  return `${datePart}-${userId}-${randomPart}`;
+async function normalizeQuoteItems(items: any[], transaction: any) {
+  if (!Array.isArray(items) || items.length === 0) {
+    throw new Error("La cotización debe incluir al menos un producto");
+  }
+
+  const seen = new Set<number>();
+  const normalized = [];
+  let subtotal = 0;
+  let iva = 0;
+  let total = 0;
+
+  for (const rawItem of items) {
+    const stockId = Number(rawItem.stockId);
+    const quantity = Number(rawItem.quantity);
+    if (!Number.isInteger(stockId) || !Number.isInteger(quantity) || quantity < 1) {
+      throw new Error("La cantidad y la presentación seleccionada no son válidas");
+    }
+    if (seen.has(stockId)) {
+      throw new Error("Una presentación no puede aparecer duplicada");
+    }
+    seen.add(stockId);
+
+    const stock = await Stock.findOne({
+      where: { ID_Stock: stockId, State: true },
+      include: [{ model: Product, include: [{ model: Iva }] }],
+      transaction,
+    });
+    const associatedProduct = stock ? (stock.get({ plain: true }) as any).Product : null;
+    if (!stock || !associatedProduct || associatedProduct.State !== true) throw new Error(`La presentación ${stockId} ya no está disponible`);
+    if (Number(stock.Amount) < quantity) {
+      throw new Error(`Stock insuficiente para ${associatedProduct.Description} (${stock.Description})`);
+    }
+
+    const price = Number(stock.Saleprice);
+    const lineSubtotal = price * quantity;
+    const tax = extractIncludedTax(lineSubtotal, associatedProduct.Iva?.Iva);
+    subtotal += tax.base;
+    iva += tax.tax;
+    total += tax.gross;
+    normalized.push({
+      ID_Product: stock.ID_Product,
+      ID_Stock: stock.ID_Stock,
+      Quantity: quantity,
+      Saleprice: price,
+      ...createTaxSnapshot({
+        unitPrice: price,
+        quantity,
+        taxId: associatedProduct.ID_Iva,
+        taxName: associatedProduct.Iva?.Description,
+        taxValue: associatedProduct.Iva?.Iva,
+      }),
+      State: true,
+    });
+  }
+
+  return { items: normalized, subtotal: roundMoney(subtotal), iva: roundMoney(iva), total: roundMoney(total) };
 }
 
 export const getListQuotes = async (req: any, res: any) => {
   try {
-    const page = parseInt(req.query.page as string) || 1;
-    const limit = parseInt(req.query.limit as string) || 10;
-    const offset = (page - 1) * limit;
-    const searchTerm = req.query.searchTerm || "";
+    const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit, 10) || 10));
+    const searchTerm = String(req.query.searchTerm || "").trim();
+    const userIds = searchTerm
+      ? (await User.findAll({ where: { Name: { [Op.iLike]: `%${searchTerm}%` } }, attributes: ["ID_User"] })).map((u) => u.ID_User)
+      : [];
+    const numericId = /^\d+$/.test(searchTerm) ? Number(searchTerm) : null;
+    const searchWhere = searchTerm
+      ? {
+          [Op.or]: [
+            ...(numericId !== null ? [{ ID_Sale: numericId }] : []),
+            ...(userIds.length ? [{ ID_User: { [Op.in]: userIds } }] : []),
+          ],
+        }
+      : {};
 
-    let sales, count;
-
-    if (searchTerm) {
-      // Buscar cotización por ID_Sale sin paginación
-      const result = await Sale.findAndCountAll({
-        where: {
-          ID_State: 1, // Cotizaciones
-          ID_Sale: searchTerm,
-        },
-        order: [["ID_Sale", "DESC"]],
-        distinct: true,
-      });
-
-      sales = result.rows;
-      count = result.count;
-
-    } else {
-      // Paginación normal
-      const result = await Sale.findAndCountAll({
-        where: { ID_State: 1 },
-        order: [["ID_Sale", "DESC"]],
-        limit,
-        offset,
-        distinct: true,
-      });
-
-      sales = result.rows;
-      count = result.count;
-    }
-
-    // Agregar info de usuario y operador
-    const salesWithUserAndOperator = await Promise.all(
-      sales.map(async (sale) => {
-        const user = sale.ID_User
-          ? await User.findOne({
-              where: { ID_User: sale.ID_User },
-              attributes: ["ID_User", "Name"],
-            })
-          : null;
-
-        const operator = sale.ID_Operador
-          ? await User.findOne({
-              where: { ID_User: sale.ID_Operador },
-              attributes: ["ID_User", "Name"],
-            })
-          : null;
-
-        return {
-          ...sale.toJSON(),
-          user,
-          operator,
-        };
-      })
-    );
-
-    const totalPages = searchTerm ? 1 : Math.ceil(count / limit);
-
-    res.status(200).json({
-      data: salesWithUserAndOperator,
-      message: "Lista de cotizaciones obtenida correctamente",
-      totalItems: count,
-      totalPages,
-      currentPage: searchTerm ? 1 : page,
-      hasMore: !searchTerm && page < totalPages,
+    const result = await Sale.findAndCountAll({
+      where: { ID_State: QUOTE_STATE_ID, ...searchWhere },
+      order: [["ID_Sale", "DESC"]],
+      limit,
+      offset: (page - 1) * limit,
+      distinct: true,
     });
 
+    const data = await Promise.all(result.rows.map(async (sale) => ({
+      ...sale.toJSON(),
+      user: sale.ID_User ? await getUserSummary(sale.ID_User) : null,
+      operator: sale.ID_Operador ? await User.findByPk(sale.ID_Operador, { attributes: ["ID_User", "Name"] }) : null,
+    })));
+    const totalPages = Math.max(1, Math.ceil(result.count / limit));
+    return res.status(200).json({ data, totalItems: result.count, totalPages, currentPage: page, hasMore: page < totalPages });
   } catch (error) {
     console.error("Error al obtener las cotizaciones:", error);
-    res.status(500).json({ message: "Error del servidor" });
+    return res.status(500).json({ message: "No fue posible obtener las cotizaciones" });
+  }
+};
+
+export const searchQuotesForCheckout = async (req: any, res: any) => {
+  try {
+    const query = String(req.query.q || "").trim();
+    if (!query) return res.json({ data: [] });
+    const numericId = /^\d+$/.test(query.replace(/^COT-/i, "")) ? Number(query.replace(/^COT-/i, "")) : null;
+    const [matchingEmails, matchingPhones] = await Promise.all([
+      Email.findAll({ where: { Description: { [Op.iLike]: `%${query}%` } }, attributes: ["ID_Email"], limit: 20 }),
+      Phone.findAll({ where: { Description: { [Op.iLike]: `%${query}%` } }, attributes: ["ID_Phone"], limit: 20 }),
+    ]);
+    const emailIds = matchingEmails.map((email) => email.ID_Email);
+    const phoneIds = matchingPhones.map((phone) => phone.ID_Phone);
+    const matchingUsers = await User.findAll({
+      where: {
+        [Op.or]: [
+          { Name: { [Op.iLike]: `%${query}%` } },
+          ...(emailIds.length ? [{ ID_Email: { [Op.in]: emailIds } }] : []),
+          ...(phoneIds.length ? [{ ID_Phone: { [Op.in]: phoneIds } }] : []),
+        ],
+      },
+      attributes: ["ID_User"],
+      limit: 20,
+    });
+    const userIds = matchingUsers.map((user) => user.ID_User);
+    if (!numericId && !userIds.length) return res.json({ data: [] });
+    const quotes = await Sale.findAll({
+      where: {
+        ID_State: QUOTE_STATE_ID,
+        DocumentType: "QUOTE",
+        DocumentStatus: "ACTIVE",
+        ConvertedSaleId: null,
+        [Op.or]: [
+          ...(numericId ? [{ ID_Sale: numericId }] : []),
+          ...(userIds.length ? [{ ID_User: { [Op.in]: userIds } }] : []),
+        ],
+      },
+      order: [["ID_Sale", "DESC"]],
+      limit: 10,
+    });
+    const data = await Promise.all(quotes.map(async (quote) => ({
+      ID_Sale: quote.ID_Sale,
+      Total: quote.Total,
+      createdAt: quote.createdAt,
+      QuoteExpiresAt: quote.QuoteExpiresAt,
+      expired: Boolean(quote.QuoteExpiresAt && new Date(quote.QuoteExpiresAt).getTime() < Date.now()),
+      user: quote.ID_User ? await getUserSummary(quote.ID_User) : null,
+    })));
+    return res.json({ data });
+  } catch (error) {
+    console.error("Error buscando cotizaciones para Caja:", error);
+    return res.status(500).json({ message: "No fue posible buscar cotizaciones" });
   }
 };
 
 export const createQuotes = async (req: any, res: any) => {
-  const t = await Sale.sequelize?.transaction();
+  const transaction = await Sale.sequelize!.transaction();
   try {
-    const {
-      ID_User,
-      Total,
-      Balance_Total,
-      Subtotal,
-      Iva,
-      Payment,
-      ID_Operador,
-      Lote,
-      State, 
-      items
-    } = req.body;
+    const normalized = await normalizeQuoteItems(req.body.items, transaction);
+    const operatorId = Number(req.user?.ID_User ?? req.body.ID_Operador);
+    if (!Number.isInteger(operatorId) || operatorId < 1) throw new Error("Operador no válido");
+    const customerId = Number(req.body.ID_User) > 0 ? Number(req.body.ID_User) : null;
 
-    const totalPayments = Payment.reduce((sum: number, p: any) => sum + p.Monto, 0);
-
-    // Crear batch con usuario 0
-    const batch = createBatch(0);
-
-    const newSale = await Sale.create({
-      ID_User,
-      Total,
-      Balance_Total: Balance_Total - totalPayments,
-      Subtotal,
-      Iva,
-      ID_State: 1,
-      ID_Operador,
-      Batch: batch,
-      State: State ?? true,
-    }, { transaction: t }); 
-
-    if (Array.isArray(Payment) && Payment.length > 0) {
-      const paymentSales = Payment.map((p) => ({
-        ID_Sale: newSale.ID_Sale,
-        ID_Payment: p.ID_Payment,
-        Description: p.Description,
-        Monto: p.Monto,
-        ReferenceNumber: p.ReferenceNumber,
-        State: true
-      }));
-
-      await PaymentSale.bulkCreate(paymentSales, { transaction: t });
-    }
-
-    if (Array.isArray(items) && items.length > 0) {
-      const productSales = items.map((item) => ({
-        ID_Sale: newSale.ID_Sale,
-        ID_Product: item.productId,
-        ID_Stock: item.stockId,
-        Quantity: item.quantity,
-        Saleprice: item.price,
-        State: true,
-      }));
-
-      await ProductSale.bulkCreate(productSales, { transaction: t });
-
-    }
-
-    await t?.commit();
-
-    res.status(201).json({
-      message: 'Venta completada con pagos, productos y stock actualizado',
-      data: newSale
-    });
-
-  } catch (error) {
-    await t?.rollback();
-    console.error('Error al crear la venta:', error);
-    res.status(500).json({
-      message: 'Error al crear la venta',
-      error
-    });
+    const sale = await Sale.create({
+      ID_User: customerId,
+      Total: normalized.total,
+      Balance_Total: normalized.total,
+      Subtotal: normalized.subtotal,
+      Iva: normalized.iva,
+      Envio: 0,
+      ID_State: QUOTE_STATE_ID,
+      ID_Operador: operatorId,
+      Batch: createBatch(operatorId),
+      Pagada: "Pendiente",
+      StateSale: true,
+      DocumentType: "QUOTE",
+      DocumentStatus: "ACTIVE",
+      QuoteExpiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+    }, { transaction });
+    await SaleProduct.bulkCreate(normalized.items.map((item) => ({ ...item, ID_Sale: sale.ID_Sale })), { transaction });
+    await transaction.commit();
+    return res.status(201).json({ message: "Cotización registrada correctamente", data: { ...sale.toJSON(), items: normalized.items } });
+  } catch (error: any) {
+    await transaction.rollback();
+    console.error("Error al crear la cotización:", error);
+    return res.status(400).json({ message: error?.message || "No fue posible crear la cotización" });
   }
 };
-
 
 export const getQuotesById = async (req: any, res: any) => {
-  const { id } = req.params;
   try {
     const sale = await Sale.findOne({
-      where: { ID_Sale: id },
+      where: { ID_Sale: req.params.id, ID_State: QUOTE_STATE_ID },
       include: [
-        {
-          model: State,
-        },
-        {
-          model: PaymentSale,
-        },
-        {
-          model: SaleProduct,
-            include: [
-            {
-              model: Product,
-              attributes: ["ID_Product", "Description"],
-              include: [
-                {
-                  model: Iva,
-                }
-              ]
-            },
-            {
-              model: Stock,
-              attributes: ["ID_Stock", "Description", "Saleprice", "Amount"]
-            }
-            ]
-        }
-      ]
+        { model: State },
+        { model: PaymentSale },
+        { model: SaleProduct, include: [
+          { model: Product, attributes: ["ID_Product", "Description"], include: [{ model: Iva }] },
+          { model: Stock, attributes: ["ID_Stock", "Description", "Saleprice", "Amount", "State"] },
+        ] },
+      ],
     });
-
-    if (!sale) {
-      return res.status(404).json({ message: "Venta no encontrada" });
-    }
-
-    const user = await User.findOne({
-      where: { ID_User: sale.ID_User },
-      attributes: ["ID_User", "Name"],
-    });
-
-    const operator = await User.findOne({
-      where: { ID_User: sale.ID_Operador },
-      attributes: ["ID_User", "Name"],
-    });
-
-    res.status(200).json({
-      data: {
-        ...sale.toJSON(),
-        user,
-        operator,
-      },
-      message: "Venta obtenida correctamente",
-    });
+    if (!sale) return res.status(404).json({ message: "Cotización no encontrada" });
+    return res.status(200).json({ data: {
+      ...sale.toJSON(),
+      user: sale.ID_User ? await getUserSummary(sale.ID_User) : null,
+      operator: sale.ID_Operador ? await User.findByPk(sale.ID_Operador, { attributes: ["ID_User", "Name"] }) : null,
+    } });
   } catch (error) {
-    console.error("Error al obtener la venta:", error);
-    res.status(500).json({ message: "Error del servidor" });
+    console.error("Error al obtener la cotización:", error);
+    return res.status(500).json({ message: "No fue posible obtener la cotización" });
   }
 };
 
-
 export const updateQuotes = async (req: any, res: any) => {
-  const t = await Sale.sequelize?.transaction();
+  const transaction = await Sale.sequelize!.transaction();
   try {
-    const {
-      ID_Sale,
-      ID_User,
-      Total,
-      Balance_Total,
-      ID_State,
-      Payment,
-      ID_Operador,
-      Lote,
-      State,
-      items
-    } = req.body;
-
-    const sale = await Sale.findByPk(ID_Sale, { transaction: t });
+    const saleId = Number(req.params.id);
+    if (Number(req.body.ID_Sale) !== saleId) throw new Error("El folio de la cotización no coincide");
+    const sale = await Sale.findOne({ where: { ID_Sale: saleId, ID_State: QUOTE_STATE_ID }, transaction });
     if (!sale) {
-      await t?.rollback();
-      return res.status(404).json({ message: "Venta no encontrada" });
+      await transaction.rollback();
+      return res.status(404).json({ message: "Cotización no encontrada" });
     }
-
-    // 1️⃣ Revertir stock de los productos anteriores
-    const oldProducts = await ProductSale.findAll({ where: { ID_Sale }, transaction: t });
-    for (const old of oldProducts) {
-      const stock = await Stock.findByPk(old.ID_Stock, { transaction: t });
-      if (stock) {
-        stock.Amount += old.Quantity; // devolvemos al stock
-        await stock.save({ transaction: t });
-      }
+    if (sale.DocumentStatus !== "ACTIVE" || sale.ConvertedSaleId) {
+      throw new Error("La cotización ya fue convertida o no está activa");
     }
+    const normalized = await normalizeQuoteItems(req.body.items, transaction);
+    const customerId = Number(req.body.ID_User) > 0 ? Number(req.body.ID_User) : null;
 
-    // 2️⃣ Eliminar pagos y productos previos
-    await PaymentSale.destroy({ where: { ID_Sale }, transaction: t });
-    await ProductSale.destroy({ where: { ID_Sale }, transaction: t });
-
-    // 3️⃣ Calcular nuevo balance
-    const totalPayments = Payment.reduce((sum: number, p: any) => sum + p.Monto, 0);
-
-    // 4️⃣ Actualizar datos de la venta
     await sale.update({
-      ID_User,
-      Total,
-      Balance_Total: Balance_Total - totalPayments,
-      ID_State,
-      ID_Operador,
-      Batch: Lote,
-      State: State ?? true
-    }, { transaction: t });
-
-    // 5️⃣ Insertar nuevos pagos
-    if (Array.isArray(Payment) && Payment.length > 0) {
-      const paymentSales = Payment.map((p) => ({
-        ID_Sale,
-        ID_Payment: p.ID_Payment,
-        Description: p.Description,
-        Monto: p.Monto,
-        ReferenceNumber: p.ReferenceNumber,
-        State: true
-      }));
-
-      await PaymentSale.bulkCreate(paymentSales, { transaction: t });
-    }
-
-    // 6️⃣ Insertar nuevos productos y ajustar stock
-    if (Array.isArray(items) && items.length > 0) {
-      const productSales = items.map((item) => ({
-        ID_Sale,
-        ID_Product: item.productId,
-        ID_Stock: item.stockId,
-        Quantity: item.quantity,
-        Saleprice: item.price,
-        State: true,
-      }));
-
-      await ProductSale.bulkCreate(productSales, { transaction: t });
-
-      for (const item of items) {
-        const stock = await Stock.findByPk(item.stockId, { transaction: t });
-        if (!stock) {
-          throw new Error(`No se encontró stock con ID ${item.stockId}`);
-        }
-
-        if (stock.Amount < item.quantity) {
-          throw new Error(`Stock insuficiente para el producto ${item.productId}`);
-        }
-
-        stock.Amount -= item.quantity;
-        await stock.save({ transaction: t });
-      }
-    }
-
-    await t?.commit();
-
-    res.json({
-      message: "Venta actualizada con éxito",
-      data: sale
-    });
-  } catch (error) {
-    await t?.rollback();
-    console.error("Error al actualizar la venta:", error);
-    res.status(500).json({
-      message: "Error al actualizar la venta",
-      error
-    });
+      ID_User: customerId,
+      Total: normalized.total,
+      Balance_Total: normalized.total,
+      Subtotal: normalized.subtotal,
+      Iva: normalized.iva,
+      Envio: 0,
+      ID_State: QUOTE_STATE_ID,
+      Pagada: "Pendiente",
+    }, { transaction });
+    await PaymentSale.destroy({ where: { ID_Sale: saleId }, transaction });
+    await SaleProduct.destroy({ where: { ID_Sale: saleId }, transaction });
+    await SaleProduct.bulkCreate(normalized.items.map((item) => ({ ...item, ID_Sale: saleId })), { transaction });
+    // Las cotizaciones no reservan ni alteran inventario. El stock se descuenta únicamente al vender.
+    await transaction.commit();
+    return res.json({ message: "Cotización actualizada correctamente", data: { ...sale.toJSON(), items: normalized.items } });
+  } catch (error: any) {
+    await transaction.rollback();
+    console.error("Error al actualizar la cotización:", error);
+    return res.status(400).json({ message: error?.message || "No fue posible actualizar la cotización" });
   }
 };

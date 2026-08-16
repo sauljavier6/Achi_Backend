@@ -16,7 +16,7 @@ import supplierRoutes from './supplierRoutes';
 import comprasRoutes from './comprasRoutes';
 
 import productERoutes from './ecommerceRoutes/productRoutes';
-import stripeRoutes from './ecommerceRoutes/stripeRoutes';
+import mercadoPagoRoutes from './ecommerceRoutes/mercadoPagoRoutes';
 import categoriesRoutes from './ecommerceRoutes/categoriesRoutes';
 import quotesERoutes from './ecommerceRoutes/quotesRoutes';
 import informationRoutes from './informationRoutes';
@@ -52,7 +52,7 @@ router.use('/facturacion', facturacionRoutes);
 
 //ecommerce routes
 router.use('/ecommerce/products', productERoutes);
-router.use('/stripe', stripeRoutes);
+  router.use('/mercadopago', mercadoPagoRoutes);
 router.use('/ecommerce/categories', categoriesRoutes);
 router.use('/ecommerce/subcategories', subcategoriesRoutes);
 router.use('/ecommerce/quotes', quotesERoutes);

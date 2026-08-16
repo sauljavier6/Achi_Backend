@@ -12,4 +12,8 @@ const storage = multer.diskStorage({
   },
 });
 
-export const uploadProfile = multer({ storage: multer.memoryStorage() }).single("profileImage");
+export const uploadProfile = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 3 * 1024 * 1024, files: 1 },
+  fileFilter: (_req, file, cb) => cb(null, ["image/jpeg", "image/png", "image/webp"].includes(file.mimetype)),
+}).single("profileImage");

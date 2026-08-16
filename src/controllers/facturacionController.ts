@@ -16,6 +16,7 @@ import Iva from "../models/Iva";
 import { generarYGuardarPDF } from "../services/cfdiPdf.service";
 import fs from "fs";
 import path from "path";
+import { normalizeTaxRate, roundMoney } from "../utils/taxInclusive";
 
 interface Ivadata {
   Description: string;
@@ -87,36 +88,74 @@ const fechaCFDI = getFechaCFDI();
 // ========================================================
 export const facturarVenta = async (req: any, res: any) => {
   try {
-    const { ID_Sale, Items } = req.body;
+    const { ID_Sale } = req.body;
+    const saleToInvoice = await Sale.findByPk(ID_Sale, {
+      include: [{
+        model: SaleProduct,
+        include: [{ model: Product, include: [{ model: Iva }] }, { model: Stock }],
+      }],
+    });
+    const saleForInvoice = saleToInvoice?.get({ plain: true }) as any;
+    if (!saleForInvoice?.SaleProduct?.length) {
+      return res.status(404).json({ message: "La venta no existe o no tiene conceptos facturables" });
+    }
+    const existingInvoice = await FacturacionTicket.findOne({ where: { ID_Sale } });
+    if (existingInvoice) {
+      return res.status(409).json({ message: "Esta venta ya cuenta con un CFDI" });
+    }
+    // Precio, cantidad e IVA siempre salen de la venta guardada; nunca del navegador.
+    const Items = saleForInvoice.SaleProduct.map((item: any) => ({
+      Quantity: Number(item.Quantity),
+      Saleprice: Number(item.Saleprice),
+      Product: item.Product,
+      Stock: item.Stock,
+      Iva: item.Product?.Iva?.Iva,
+      TaxRate: item.TaxRate,
+      TaxBase: item.TaxBase,
+      TaxAmount: item.TaxAmount,
+      TaxGross: item.TaxGross,
+      TaxObject: item.TaxObject,
+      TaxFactor: item.TaxFactor,
+      TaxSnapshotSource: item.TaxSnapshotSource,
+    }));
 
     let subtotal = 0;
     let totalIVA = 0;
 
     // 👉 Agrupador de impuestos por tasa
-    const impuestosPorTasa: Record<string, { base: number; importe: number }> =
+    const impuestosPorTasa: Record<string, { base: number; importe: number; tasa: number; factor: string }> =
       {};
 
     // ===============================
     // CONCEPTOS
     // ===============================
     const conceptosXML = Items.map((item: any) => {
-      const cantidad = item.Quantity;
-      const valorUnitario = item.Saleprice; // PRECIO REAL DE LA VENTA
-      const importe = +(cantidad * valorUnitario).toFixed(2);
-
-      const tasaIVA = Number(item.Iva); // 0 | 0.08 | 0.16
-      const ivaImporte = +(importe * tasaIVA);
+      const cantidad = Number(item.Quantity);
+      const precioConIva = Number(item.Saleprice);
+      const tasaIVA = normalizeTaxRate(item.TaxRate ?? item.Iva ?? item.Product?.Iva?.Iva);
+      const taxObject = item.TaxObject || "02";
+      const taxFactor = item.TaxFactor || "Tasa";
+      // CFDI expresa ValorUnitario e Importe antes de impuestos. El precio del POS
+      // se conserva como precio final con IVA incluido.
+      const importe = Number.isFinite(Number(item.TaxBase))
+        ? +Number(item.TaxBase).toFixed(6)
+        : +((precioConIva * cantidad) / (1 + tasaIVA)).toFixed(6);
+      const valorUnitario = +(importe / cantidad).toFixed(6);
+      const ivaImporte = Number.isFinite(Number(item.TaxAmount))
+        ? +Number(item.TaxAmount).toFixed(6)
+        : +(importe * tasaIVA).toFixed(6);
 
       subtotal += importe;
 
       // Agrupar impuestos
-      if (tasaIVA > 0) {
-        if (!impuestosPorTasa[tasaIVA]) {
-          impuestosPorTasa[tasaIVA] = { base: 0, importe: 0 };
+      if (taxObject === "02") {
+        const taxKey = `${taxFactor}:${tasaIVA}`;
+        if (!impuestosPorTasa[taxKey]) {
+          impuestosPorTasa[taxKey] = { base: 0, importe: 0, tasa: tasaIVA, factor: taxFactor };
         }
 
-        impuestosPorTasa[tasaIVA].base += importe;
-        impuestosPorTasa[tasaIVA].importe += ivaImporte;
+        impuestosPorTasa[taxKey].base += importe;
+        impuestosPorTasa[taxKey].importe += ivaImporte;
       }
 
       return `
@@ -125,21 +164,21 @@ export const facturarVenta = async (req: any, res: any) => {
         Cantidad="${cantidad}"
         ClaveUnidad="H87"
         Descripcion="${item.Product.Description} ${item.Stock.Description}"
-        ValorUnitario="${valorUnitario}"
-        Importe="${importe.toFixed(2)}"
-        ObjetoImp="${tasaIVA > 0 ? "02" : "01"}">
+        ValorUnitario="${valorUnitario.toFixed(6)}"
+        Importe="${importe.toFixed(6)}"
+        ObjetoImp="${taxObject}">
 
         ${
-          tasaIVA > 0
+          taxObject === "02"
             ? `
         <cfdi:Impuestos>
           <cfdi:Traslados>
             <cfdi:Traslado
-              Base="${importe.toFixed(2)}"
+              Base="${importe.toFixed(6)}"
               Impuesto="002"
-              TipoFactor="Tasa"
+              TipoFactor="${taxFactor}"${taxFactor === "Tasa" ? `
               TasaOCuota="${tasaIVA.toFixed(6)}"
-              Importe="${ivaImporte.toFixed(2)}"/>
+              Importe="${ivaImporte.toFixed(6)}"` : ""}/>
           </cfdi:Traslados>
         </cfdi:Impuestos>`
             : ""
@@ -149,9 +188,9 @@ export const facturarVenta = async (req: any, res: any) => {
       }).join("");
 
     const trasladosXML = Object.entries(impuestosPorTasa)
-      .map(([tasa, data]) => {
+      .map(([, data]) => {
         const base = +data.base.toFixed(2);
-        const importeIVA = +(base * Number(tasa)).toFixed(2);
+        const importeIVA = data.factor === "Tasa" ? roundMoney(data.importe) : 0;
 
         totalIVA += importeIVA;
 
@@ -159,13 +198,15 @@ export const facturarVenta = async (req: any, res: any) => {
         <cfdi:Traslado
           Base="${base.toFixed(2)}"
           Impuesto="002"
-          TipoFactor="Tasa"
-          TasaOCuota="${Number(tasa).toFixed(6)}"
-          Importe="${importeIVA.toFixed(2)}"/>`;
+          TipoFactor="${data.factor}"${data.factor === "Tasa" ? `
+          TasaOCuota="${data.tasa.toFixed(6)}"
+          Importe="${importeIVA.toFixed(2)}"` : ""}/>`;
               })
         .join("");
 
-    const total = +(subtotal + totalIVA).toFixed(2);
+    subtotal = roundMoney(subtotal);
+    totalIVA = roundMoney(totalIVA);
+    const total = roundMoney(subtotal + totalIVA);
 
     // ===============================
     // XML CFDI 4.0
@@ -205,7 +246,7 @@ export const facturarVenta = async (req: any, res: any) => {
       </cfdi:Conceptos>
 
       ${
-        totalIVA > 0
+        trasladosXML.length > 0
           ? `
       <cfdi:Impuestos TotalImpuestosTrasladados="${totalIVA.toFixed(2)}">
         <cfdi:Traslados>

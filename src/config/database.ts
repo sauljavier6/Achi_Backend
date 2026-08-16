@@ -24,6 +24,7 @@ import Iva from '../models/Iva';
 import FacturacionTicket from '../models/FacturacionTicket';
 import Address from '../models/Adress';
 import SubCategory from '../models/SubCategory';
+import EmailDelivery from '../models/EmailDelivery';
 
 dotenv.config();
 
@@ -34,7 +35,7 @@ const sequelize = new Sequelize({
   username: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
-  models: [Rol, User, Email, Product, Stock, Category, Sale, State, Payment, PaymentSale, ProductSale, Batch, 
+  models: [EmailDelivery, Rol, User, Email, Product, Stock, Category, Sale, State, Payment, PaymentSale, ProductSale, Batch, 
     Phone, Retiro, Facturacion, Compras, ComprasProduct, PaymentCompra, ImagenProduct, Iva, FacturacionTicket, 
     Address, SubCategory ], // ✅ registra los modelos aquí
   logging: false,

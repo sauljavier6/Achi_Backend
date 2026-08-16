@@ -10,8 +10,8 @@ const router = Router();
 
 router.get('/', authenticateToken, checkRole("Administrador","Trabajador"), getProducts);
 router.get('/:id', authenticateToken, checkRole("Administrador","Trabajador"), getProductById);
-router.post("/", upload.array("Imagenes", 5), resizeImages, authenticateToken, checkRole("Administrador","Trabajador"), postProducts);
+router.post("/", authenticateToken, checkRole("Administrador","Trabajador"), upload.array("Imagenes", 5), resizeImages, postProducts);
 router.delete('/', authenticateToken, checkRole("Administrador","Trabajador"), deleteproducts);
-router.put('/', upload.array("Imagenes", 5), resizeImages, authenticateToken, checkRole("Administrador","Trabajador"), checkRole("Administrador","Trabajador"), updateProduct);
+router.put('/', authenticateToken, checkRole("Administrador","Trabajador"), upload.array("Imagenes", 5), resizeImages, updateProduct);
 
 export default router; 

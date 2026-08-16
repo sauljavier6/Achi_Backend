@@ -36,7 +36,8 @@ export const getProductsCatalogo = async (req: any, res: any) => {
     } else if (sortBy === "worstPrice") {
       order = [[{ model: Stock, as: "Stocks" }, "Saleprice", "DESC"]];
     } else if (sortBy === "bestSeller") {
-      order = [["SoldCount", "DESC"]];
+      // La tabla actual no tiene SoldCount; se usa antigüedad como fallback estable.
+      order = [["createdAt", "ASC"]];
     } else if (sortBy === "newest") {
       order = [["createdAt", "DESC"]];
     }

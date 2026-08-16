@@ -5,7 +5,9 @@
   "scripts": {
     "dev": "ts-node-dev --respawn src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "migrate:tax-snapshot": "node scripts/migrate-tax-snapshot.js",
+    "migrate:quote-conversion": "node scripts/migrate-quote-conversion.js"
   },
   "keywords": [],
   "author": "",
@@ -32,8 +34,6 @@
     "typescript": "^5.8.3"
   },
   "dependencies": {
-    "@stripe/react-stripe-js": "^3.9.2",
-    "@stripe/stripe-js": "^7.9.0",
     "@xmldom/xmldom": "^0.8.11",
     "bcrypt": "^6.0.0",
     "bcryptjs": "^3.0.2",
@@ -52,12 +52,10 @@
     "pg-hstore": "^2.3.4",
     "qrcode": "^1.5.4",
     "reflect-metadata": "^0.2.2",
-    "resend": "^6.9.2",
     "sequelize": "^6.37.7",
     "sequelize-typescript": "^2.1.6",
     "sharp": "^0.34.3",
     "soap": "^1.6.0",
-    "stripe": "^18.4.0",
     "xml2js": "^0.6.2",
     "xmldom": "^0.6.0"
   }

@@ -6,11 +6,11 @@ import { checkRole } from "../middlewares/checkRoleMiddleware";
 
 const router = Router();
 
-router.get("/cotizacion/:id", printTicketCotizacion);
-router.post("/cotizacion/:id", sendCotizacionByEmail);
+router.get("/cotizacion/:id", authenticateToken, checkRole("Administrador","Trabajador"), printTicketCotizacion);
+router.post("/cotizacion/:id", authenticateToken, checkRole("Administrador","Trabajador"), sendCotizacionByEmail);
 
-router.get("/:id", printTicket);
-router.post("/:id", sendTicketByEmail);
+router.get("/:id", authenticateToken, checkRole("Administrador","Trabajador"), printTicket);
+router.post("/:id", authenticateToken, checkRole("Administrador","Trabajador"), sendTicketByEmail);
 
 
 export default router;

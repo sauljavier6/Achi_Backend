@@ -20,6 +20,10 @@ interface IUser {
 export const register = async (req: any, res: any) => {
   const { name, email, password, phone } = req.body;
 
+  if (!name?.trim() || !phone?.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email ?? "") || typeof password !== "string" || password.length < 10) {
+    return res.status(400).json({ message: "Datos inválidos. La contraseña debe tener al menos 10 caracteres." });
+  }
+
   const t = await sequelize.transaction();
 
   try {
@@ -89,14 +93,16 @@ export const login = async (req: any, res: any) => {
 
   try {
     const emaildata = await Email.findOne({ where: { Description: email } }) as unknown as IUser;
-    if (!emaildata) return res.status(404).json({ message: 'Usuario no encontrado' });
+    if (!emaildata) return res.status(401).json({ message: 'Credenciales inválidas' });
 
     const user = await User.findOne({ where: { ID_Email: emaildata.ID_Email } }) as unknown as IUser;
+
+    if (!user || !user.State) return res.status(401).json({ message: 'Credenciales inválidas' });
 
     const rol = await Rol.findOne({ where: { ID_Rol: user.ID_Rol } });
 
     const isValid = await bcrypt.compare(password, user.Password);
-    if (!isValid) return res.status(401).json({ message: 'Contraseña incorrecta' });
+    if (!isValid) return res.status(401).json({ message: 'Credenciales inválidas' });
 
     if (!rol) return res.status(404).json({ message: 'Rol no encontrado' });
 

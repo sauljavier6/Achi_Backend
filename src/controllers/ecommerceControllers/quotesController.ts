@@ -6,9 +6,13 @@ import User from "../../models/User";
 import Phone from "../../models/Phone";
 import sequelize from '../../config/database';
 import { QueryTypes } from 'sequelize';
-import nodemailer from 'nodemailer';
 import PaymentSale from "../../models/PaymentSale";
 import State from "../../models/State";
+import { sendSaleEmail as sendUnifiedSaleEmail } from "../../services/saleEmailService";
+import Stock from "../../models/Stock";
+import Product from "../../models/Product";
+import Iva from "../../models/Iva";
+import { createTaxSnapshot, extractIncludedTax, roundMoney } from "../../utils/taxInclusive";
 
 
 export const createQuotes = async (req: any, res: any) => {
@@ -16,11 +20,53 @@ export const createQuotes = async (req: any, res: any) => {
   try {
     const {
       User: datosUser,
-      Total,
-      Subtotal,
-      Iva,
       items
     } = req.body;
+
+    if (!Array.isArray(items) || items.length === 0) {
+      await t?.rollback();
+      return res.status(400).json({ message: "La cotización requiere productos" });
+    }
+
+    const normalizedItems: Array<{ productId: number; stockId: number; quantity: number; price: number; taxSnapshot: ReturnType<typeof createTaxSnapshot> }> = [];
+    let calculatedSubtotal = 0;
+    let calculatedIva = 0;
+    let calculatedTotal = 0;
+    for (const item of items) {
+      const stockId = Number(item.stockId);
+      const quantity = Number(item.quantity);
+      if (!Number.isInteger(stockId) || !Number.isInteger(quantity) || quantity <= 0) {
+        throw new Error("Los productos de la cotización no son válidos");
+      }
+      const stock = await Stock.findOne({
+        where: { ID_Stock: stockId, State: true },
+        include: [{ model: Product, include: [{ model: Iva }] }],
+        transaction: t,
+      });
+      const associatedProduct = stock ? (stock.get({ plain: true }) as any).Product : null;
+      if (!stock || !associatedProduct || associatedProduct.State !== true) throw new Error("Uno de los productos ya no está disponible");
+      const price = Number(stock.Saleprice);
+      const included = extractIncludedTax(price * quantity, associatedProduct.Iva?.Iva);
+      calculatedSubtotal += included.base;
+      calculatedIva += included.tax;
+      calculatedTotal += included.gross;
+      normalizedItems.push({
+        productId: stock.ID_Product,
+        stockId,
+        quantity,
+        price,
+        taxSnapshot: createTaxSnapshot({
+          unitPrice: price,
+          quantity,
+          taxId: associatedProduct.ID_Iva,
+          taxName: associatedProduct.Iva?.Description,
+          taxValue: associatedProduct.Iva?.Iva,
+        }),
+      });
+    }
+    const saleSubtotal = roundMoney(calculatedSubtotal);
+    const saleIva = roundMoney(calculatedIva);
+    const saleTotal = roundMoney(calculatedTotal);
 
 
     let userData;
@@ -62,10 +108,10 @@ export const createQuotes = async (req: any, res: any) => {
 
     const newSale = await Sale.create({
       ID_User: userData?.ID_User || 1,
-      Total,
-      Subtotal,
-      Iva,
-      Balance_Total: Total,
+      Total: saleTotal,
+      Subtotal: saleSubtotal,
+      Iva: saleIva,
+      Balance_Total: saleTotal,
       ID_State: 1,
       ID_Operador: 1,
       Batch: '',
@@ -73,22 +119,22 @@ export const createQuotes = async (req: any, res: any) => {
     }, { transaction: t }); 
 
 
-    if (Array.isArray(items) && items.length > 0) {
-      const productSales = items.map((item) => ({
+    if (normalizedItems.length > 0) {
+      const productSales = normalizedItems.map((item) => ({
         ID_Sale: newSale.ID_Sale,
         ID_Product: item.productId,
         ID_Stock: item.stockId,
         Quantity: item.quantity,
         Saleprice: item.price,
+        ...item.taxSnapshot,
         State: true,
       }));
 
       await ProductSale.bulkCreate(productSales, { transaction: t });
     }
 
-    sendCotizacionByEmail(newSale.ID_Sale);
-
     await t?.commit();
+    await sendCotizacionByEmail(newSale.ID_Sale);
 
     res.status(201).json({
       message: 'success',
@@ -152,9 +198,9 @@ export const sendCotizacionByEmail = async (saleId: number) => {
           </style>
         </head>
         <body>
-          <div class="center bold">valentto mx</div>
+          <div class="center bold">ACHI VETERINARIA</div>
           <div class="center">Cotizacion</div>
-          <div class="center">ValenttoMX@gmail.com</div>
+          <div class="center">Achi Veterinaria · Tijuana, BC</div>
           <div class="center">Tijuana, BC</div>
           <div class="center">Tel: (663) 403-2690</div>
           <div class="line"></div>
@@ -186,23 +232,7 @@ export const sendCotizacionByEmail = async (saleId: number) => {
       </html>
     `;
 
-    // Configura el transporte
-    const transporter = nodemailer.createTransport({
-      service: 'gmail', // o tu proveedor SMTP
-      auth: {
-        user: 'psauljavier6@gmail.com',
-        pass: 'svql lgaj xtqi xrtd',
-      },
-    });
-
-    const mailOptions = {
-      from: 'tuemail@gmail.com',
-      to: to,
-      subject: `Ticket de venta #${sale.ID_Sale}`,
-      html,
-    };
-
-    await transporter.sendMail(mailOptions);
+    await sendUnifiedSaleEmail(saleId, "quote", `quote-created:${saleId}`);
     
   } catch (error) {
     console.error("Error al enviar ticket:", error);

@@ -103,6 +103,27 @@ export default class Sale extends Model {
   })
   declare Pagada: "Pagada" | "Pendiente";
 
+  @Column({ type: DataType.STRING(10), allowNull: false, defaultValue: "SALE" })
+  declare DocumentType: "SALE" | "QUOTE";
+
+  @Column({ type: DataType.STRING(20), allowNull: false, defaultValue: "ACTIVE" })
+  declare DocumentStatus: "ACTIVE" | "CONVERTED" | "CANCELLED" | "EXPIRED";
+
+  @Column({ type: DataType.INTEGER, allowNull: true })
+  declare SourceQuoteId?: number | null;
+
+  @Column({ type: DataType.INTEGER, allowNull: true })
+  declare ConvertedSaleId?: number | null;
+
+  @Column({ type: DataType.DATE, allowNull: true })
+  declare ConvertedAt?: Date | null;
+
+  @Column({ type: DataType.INTEGER, allowNull: true })
+  declare ConvertedBy?: number | null;
+
+  @Column({ type: DataType.DATE, allowNull: true })
+  declare QuoteExpiresAt?: Date | null;
+
   @Column({
     type: DataType.BOOLEAN,
     allowNull: true,
